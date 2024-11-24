@@ -1,0 +1,96 @@
+import { useEffect, useState, useCallback } from 'react';
+import { socket } from './Socket.js';
+
+function App() {
+  const [call, setCall] = useState(false);
+  const [audioBlob, setAudioBlob] = useState(null);
+  const [isRecording, setIsRecording] = useState(false);
+
+  const callDisconnect = useCallback(() => {
+    setCall(false);
+    socket.disconnect();
+    socket.off('speak');
+  }, []);
+
+  const callConnect = () => {
+    setCall(true);
+    socket.connect();
+  };
+
+  const startRecording = async () => {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      alert("Your browser doesn't support audio recording.");
+      return;
+    }
+
+    await setIsRecording(true);
+
+    // Request access to the microphone
+    await navigator.mediaDevices
+      .getUserMedia({ audio: true })
+      .then(async (stream) => {
+        const mediaRecorder = new MediaRecorder(stream);
+        const audioChunks = [];
+
+        // Collect audio data when data is available
+        mediaRecorder.ondataavailable = async (event) => {
+          await audioChunks.push(event.data);
+        };
+
+        // Stop recording after 5 seconds
+        setTimeout(async () => {
+          await mediaRecorder.stop();
+        }, 5000);
+
+        // On stop, create the Blob and update state
+        mediaRecorder.onstop = async () => {
+          const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+          await setAudioBlob(audioBlob);
+          await setIsRecording(false);
+          // Stop all tracks to release the microphone
+          await stream.getTracks().forEach(async (track) => await track.stop());
+        };
+
+        await mediaRecorder.start();
+      })
+      .catch(async (error) => {
+        console.error('Error accessing microphone:', error);
+        await setIsRecording(false);
+      });
+  };
+
+  useEffect(() => {
+    const handleSpeak = async (data) => {
+      console.log('speak');
+      console.log(data);
+      if (data['continue_conversation'] === true) {
+        console.log(data?.continue_conversation, 'continue_conversation');
+        // Record for 5 sec and emit to server
+        await startRecording();
+        socket.emit('call', { audio: audioBlob });
+      } else {
+        callDisconnect();
+      }
+    };
+
+    if (call) {
+      socket.on('speak', handleSpeak);
+    }
+
+    return () => {
+      socket.off('speak', handleSpeak);
+    };
+  }, [call, callDisconnect]);
+
+  return (
+    <>
+      {!call ? (
+        <h1 onClick={callConnect}>Call</h1>
+      ) : (
+        <h1 onClick={callDisconnect}>Not Call</h1>
+      )}
+    </>
+  );
+}
+
+export default App;
